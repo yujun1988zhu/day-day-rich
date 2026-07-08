@@ -5,7 +5,7 @@ import os
 import time
 import datetime
 from config import DATA_DIR, TOP_N
-from src.data_engine import get_stock_list, get_stock_daily, get_roe_data, is_trading_hours
+from src.data_engine import get_stock_list, get_stock_daily, get_roe_data, is_trading_hours, load_watchlist, add_to_watchlist, remove_from_watchlist
 from src.factor import scan_universe
 from src.signals import get_latest_signal
 from src.chart import plot_kline
@@ -100,13 +100,13 @@ div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
     width: 5px; height: 100%;
 }
 .signal-buy {
-    background: linear-gradient(135deg, #e8f5e9 0%, #d4edda 100%);
-}
-.signal-buy::before { background: #28a745; }
-.signal-sell {
     background: linear-gradient(135deg, #fff3f3 0%, #fde2e2 100%);
 }
-.signal-sell::before { background: #dc3545; }
+.signal-buy::before { background: #dc3545; }
+.signal-sell {
+    background: linear-gradient(135deg, #e8f5e9 0%, #d4edda 100%);
+}
+.signal-sell::before { background: #28a745; }
 .signal-hold {
     background: linear-gradient(135deg, #f8f9fa 0%, #eef1f5 100%);
 }
@@ -154,6 +154,19 @@ div[data-testid="stDataFrame"] tr:hover { background-color: #e8f0fe !important; 
 /* ═══ 隐藏 footer ═══ */
 footer { visibility: hidden; }
 #MainMenu { visibility: hidden; }
+
+/* ═══ 隐藏 Deploy 按钮 ═══ */
+button[kind="header"] {
+    display: none !important;
+}
+deploy-button, [data-testid="stDeployButton"] {
+    display: none !important;
+}
+
+/* ═══ Tab 标签区域增加顶部间距，避免与上方标题遮挡 ══ */
+.stTabs {
+    margin-top: 20px;
+}
 
 /* ═══ 数据卡片 ═══ */
 .data-card {
@@ -243,6 +256,41 @@ with st.sidebar:
 
     st.markdown("---")
 
+    # ── 自选股管理 ──
+    with st.expander("⭐ 自选股管理", expanded=True):
+        _wl = load_watchlist()
+        if not _wl.empty:
+            st.markdown(f"当前 **{len(_wl)}** 只自选股：")
+            for _, _row in _wl.iterrows():
+                _c = str(_row["code"]).zfill(6)
+                _n = str(_row["name"])
+                _col1, _col2 = st.columns([4, 1])
+                with _col1:
+                    st.markdown(f"**{_n}** `{_c}`")
+                with _col2:
+                    if st.button("❌", key=f"rm_{_c}", help=f"移除 {_n}"):
+                        remove_from_watchlist(_c)
+                        st.rerun()
+        else:
+            st.info("暂无自选股，请在下方添加")
+
+        st.markdown("")
+        with st.form("add_watchlist_form"):
+            new_code = st.text_input("输入股票代码（6位）", placeholder="如 600519", max_chars=6)
+            new_name = st.text_input("股票名称（可选）", placeholder="留空自动获取")
+            if st.form_submit_button("➕ 添加到自选", use_container_width=True):
+                if new_code and len(new_code.strip()) == 6:
+                    ok = add_to_watchlist(new_code.strip(), new_name.strip())
+                    if ok:
+                        st.success(f"已添加 {new_code}")
+                        st.rerun()
+                    else:
+                        st.warning("该股票已在自选列表中")
+                else:
+                    st.error("请输入6位有效股票代码")
+
+    st.markdown("---")
+
     # 侧边栏底部说明
     st.markdown("<br><br>", unsafe_allow_html=True)
     with st.expander("📊 因子权重说明"):
@@ -265,8 +313,8 @@ with st.sidebar:
         - 紫色点线: 中轨
         
         **交易信号**
-        - 🟢 绿色▲ 建仓信号（金叉/突破上轨）
-        - 🔴 红色▼ 风险信号（死叉/跌破下轨）
+        - 🔴 红色▲ 建仓信号（金叉/突破上轨）
+        - 🟢 绿色▼ 风险信号（死叉/跌破下轨）
         """)
 
 # 文件路径
@@ -361,177 +409,394 @@ today_display = datetime.date.today().strftime("%Y-%m-%d")
 weekday_map = {0: "周一", 1: "周二", 2: "周三", 3: "周四", 4: "周五", 5: "周六", 6: "周日"}
 weekday = weekday_map[datetime.date.today().weekday()]
 
-# ── 顶部标题栏 ──
-header_col1, header_col2 = st.columns([3, 1])
-with header_col1:
-    st.markdown(
-        f'<div style="display:flex; align-items:center; gap:12px; margin-bottom:8px;">'
-        f'<div style="font-size:1.6em; font-weight:800; color:#1a1a2e;">🏆 今日候选池</div>'
-        f'<div style="background:#4361ee; color:white; padding:3px 12px; border-radius:20px; '
-        f'font-size:0.8em; font-weight:600;">{today_display} {weekday}</div>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-with header_col2:
-    st.markdown(
-        f'<div style="text-align:right; color:#888; font-size:0.85em; padding-top:8px;">'
-        f'共 <b style="color:#4361ee; font-size:1.2em;">{len(pool)}</b> 只候选 &nbsp;|&nbsp; '
-        f'Top {TOP_N}'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
+# ── 主Tab切换 ──
+tab_pool, tab_watch = st.tabs(["🏆 今日候选池", "⭐ 自选股"])
 
-if pool.empty:
-    st.warning("暂无数据，请点击左侧「刷新全市场数据」按钮。")
-    st.stop()
+# ══════════════════════════════════════════════
+#  Tab 1: 今日候选池
+# ══════════════════════════════════════════════
+with tab_pool:
+    # ── 顶部标题栏 ──
+    header_col1, header_col2 = st.columns([3, 1])
+    with header_col1:
+        st.markdown(
+            f'<div style="display:flex; align-items:center; gap:12px; margin-bottom:8px;">'
+            f'<div style="font-size:1.6em; font-weight:800; color:#1a1a2e;">🏆 今日候选池</div>'
+            f'<div style="background:#4361ee; color:white; padding:3px 12px; border-radius:20px; "'
+            f'font-size:0.8em; font-weight:600;">{today_display} {weekday}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+    with header_col2:
+        st.markdown(
+            f'<div style="text-align:right; color:#888; font-size:0.85em; padding-top:8px;">'
+            f'共 <b style="color:#4361ee; font-size:1.2em;">{len(pool)}</b> 只候选 &nbsp;|&nbsp; '
+            f'Top {TOP_N}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
 
-# ── 顶部指标卡片 ──
-st.markdown("---")
-m1, m2, m3, m4 = st.columns(4)
-with m1:
-    st.metric("📋 候选股票", f"{len(pool)} 只")
-with m2:
-    top_score = pool["score"].max() if "score" in pool.columns else 0
-    st.metric("🏅 最高得分", f"{top_score:.1f}")
-with m3:
-    avg_mom = pool["mom_20d"].mean() if "mom_20d" in pool.columns else 0
-    mom_delta = round(avg_mom - 0, 2)
-    st.metric("📈 平均20日涨幅", f"{avg_mom:.2f}%", delta=f"{mom_delta:+.2f}%")
-with m4:
-    avg_pb = pool["pb"].mean() if "pb" in pool.columns else 0
-    st.metric("💰 平均PB", f"{avg_pb:.2f}")
-
-st.markdown("<br>", unsafe_allow_html=True)
-
-# ── 左右分栏 ──
-col_left, col_right = st.columns([1, 2.5], gap="large")
-
-# ── 左侧: 股票池 ──
-with col_left:
-    st.markdown(
-        '<div class="section-title">'
-        '<div class="icon">📋</div>'
-        '<span>候选池排名</span>'
-        '</div>',
-        unsafe_allow_html=True,
-    )
-
-    display_cols = ["code", "name", "score"]
-    if "mom_20d" in pool.columns:
-        display_cols.append("mom_20d")
-    display_cols.append("pb")
-    if "roe" in pool.columns:
-        display_cols.append("roe")
-
-    display_pool = pool[display_cols].copy()
-    col_names = {"code": "代码", "name": "名称", "score": "得分",
-                 "mom_20d": "20日涨幅%", "pb": "PB", "roe": "ROE"}
-    display_pool.columns = [col_names.get(c, c) for c in display_cols]
-    display_pool = display_pool.round(2)
-    display_pool = display_pool.reset_index(drop=True)
-    display_pool.index += 1
-
-    selected_idx = st.dataframe(
-        display_pool,
-        use_container_width=True,
-        on_select="rerun",
-        selection_mode="single-row",
-        height=620,
-    )
-
-    if selected_idx.selection.rows:
-        sel_row = selected_idx.selection.rows[0]
-        st.session_state.selected_row = sel_row
-
-    _row = st.session_state.get("selected_row", 0)
-    if _row < len(pool):
-        selected_code = str(pool.iloc[_row]["code"]).zfill(6)
-        selected_name = str(pool.iloc[_row]["name"])
+    if pool.empty:
+        st.warning("暂无数据，请点击左侧「刷新全市场数据」按钮。")
     else:
-        selected_code = str(pool.iloc[0]["code"]).zfill(6)
-        selected_name = str(pool.iloc[0]["name"])
+        # 确保 TOP_N 生效（缓存可能包含旧数据）
+        if len(pool) > TOP_N:
+            pool = pool.head(TOP_N)
 
-# ── 右侧: K线 + 信号 ──
-with col_right:
-    # 股票标题
-    st.markdown(f"### {selected_name} **{selected_code}**")
+        # ── 顶部指标卡片 ──
+        st.markdown("---")
+        m1, m2, m3, m4 = st.columns(4)
+        with m1:
+            st.metric("📋 候选股票", f"{len(pool)} 只")
+        with m2:
+            top_score = pool["score"].max() if "score" in pool.columns else 0
+            st.metric("🏅 最高得分", f"{top_score:.1f}")
+        with m3:
+            avg_mom = pool["mom_20d"].mean() if "mom_20d" in pool.columns else 0
+            mom_delta = round(avg_mom - 0, 2)
+            st.metric("📈 平均20日涨幅", f"{avg_mom:.2f}%", delta=f"{mom_delta:+.2f}%")
+        with m4:
+            avg_pb = pool["pb"].mean() if "pb" in pool.columns else 0
+            st.metric("💰 平均PB", f"{avg_pb:.2f}")
 
-    with st.spinner(f"正在加载 {selected_code} K线..."):
-        daily = get_stock_daily(selected_code, days=120)
+        st.markdown("<br>", unsafe_allow_html=True)
 
-    if daily.empty or len(daily) < 30:
-        st.error("数据不足，无法绘制K线图。")
-    else:
-        signal_info = get_latest_signal(daily)
-        sig = signal_info["signal"]
+        # K线显示/隐藏切换
+        if "show_kline_pool" not in st.session_state:
+            st.session_state.show_kline_pool = True
 
-        # 信号卡片 + 指标
-        if sig == "BUY":
-            css_class = "signal-buy"
-            icon = "🟢"
-            sig_label = "建仓信号"
-            sig_color = "#28a745"
-        elif sig == "SELL":
-            css_class = "signal-sell"
-            icon = "🔴"
-            sig_label = "风险信号"
-            sig_color = "#dc3545"
+        # ── 左右分栏（根据K线显示状态调整比例）──
+        if st.session_state.show_kline_pool:
+            col_left, col_right = st.columns([1.3, 2], gap="large")
         else:
-            css_class = "signal-hold"
-            icon = "⚪"
-            sig_label = "观望"
-            sig_color = "#6c757d"
+            col_left, col_right = st.columns([1, 1], gap="large")
 
-        sig_col, ind_col = st.columns([1.5, 3])
-
-        with sig_col:
+        # ── 左侧: 股票池 ──
+        with col_left:
             st.markdown(
-                f'<div class="signal-card {css_class}">'
-                f'<div class="signal-icon">{icon}</div>'
-                f'<div class="signal-text" style="color:{sig_color};">{sig_label}</div>'
-                f'<div class="signal-sub">{signal_info["text"]}</div>'
-                f'<div class="signal-sub" style="margin-top:6px;">'
-                f'收盘价 &nbsp;<b style="font-size:1.2em; color:#1a1a2e;">{signal_info["close"]:.2f}</b>'
-                f'</div>'
-                f'</div>',
+                '<div class="section-title">'
+                '<div class="icon">📋</div>'
+                '<span>候选池排名</span>'
+                '</div>',
                 unsafe_allow_html=True,
             )
 
-        with ind_col:
-            ic1, ic2, ic3 = st.columns(3)
-            with ic1:
-                st.metric("🟠 MA5", f"{signal_info['ma_short']:.2f}")
-            with ic2:
-                st.metric("🔵 MA20", f"{signal_info['ma_long']:.2f}")
-            with ic3:
-                boll_width = signal_info['boll_upper'] - signal_info['boll_lower']
-                st.metric("📏 布林带宽", f"{boll_width:.2f}")
+            display_cols = ["code", "name", "score"]
+            if "mom_20d" in pool.columns:
+                display_cols.append("mom_20d")
+            display_cols.append("pb")
+            if "roe" in pool.columns:
+                display_cols.append("roe")
 
-        # K线图
-        st.markdown("<br>", unsafe_allow_html=True)
-        fig = plot_kline(daily, selected_code, selected_name)
-        st.pyplot(fig)
+            display_pool = pool[display_cols].copy()
+            col_names = {"code": "代码", "name": "名称", "score": "得分",
+                         "mom_20d": "20日涨幅%", "pb": "PB", "roe": "ROE"}
+            display_pool.columns = [col_names.get(c, c) for c in display_cols]
+            display_pool = display_pool.round(2)
+            display_pool = display_pool.reset_index(drop=True)
+            display_pool.index += 1
 
-        # 底部关键数据
-        st.markdown("<br>", unsafe_allow_html=True)
-        latest = daily.iloc[-1]
-        d1, d2, d3, d4, d5 = st.columns(5)
-        with d1:
-            pct = latest.get("pct_change", 0)
-            st.metric("涨跌幅", f"{pct:.2f}%", delta=f"{pct:.2f}%" if pct else None)
-        with d2:
-            st.metric("振幅", f"{latest.get('amplitude', 0):.2f}%")
-        with d3:
-            vol = latest.get('volume', 0)
-            if vol >= 1e8:
-                st.metric("成交量", f"{vol/1e8:.2f}亿")
+            _list_height = 420 if st.session_state.show_kline_pool else 520
+            selected_idx = st.dataframe(
+                display_pool,
+                use_container_width=True,
+                on_select="rerun",
+                selection_mode="single-row",
+                height=_list_height,
+            )
+
+            if selected_idx.selection.rows:
+                sel_row = selected_idx.selection.rows[0]
+                st.session_state.selected_row = sel_row
+
+            _row = st.session_state.get("selected_row", 0)
+            if _row < len(pool):
+                selected_code = str(pool.iloc[_row]["code"]).zfill(6)
+                selected_name = str(pool.iloc[_row]["name"])
             else:
-                st.metric("成交量", f"{vol/1e4:.1f}万")
-        with d4:
-            st.metric("收盘价", f"{latest['close']:.2f}")
-        with d5:
-            turnover = latest.get('turnover', None)
-            if turnover is not None and pd.notna(turnover):
-                st.metric("换手率", f"{turnover:.2f}%")
+                selected_code = str(pool.iloc[0]["code"]).zfill(6)
+                selected_name = str(pool.iloc[0]["name"])
+
+        # ── 右侧: 信号 + K线 ──
+        with col_right:
+            # 股票标题 + K线切换按钮
+            _title_col, _toggle_col = st.columns([3, 1])
+            with _title_col:
+                st.markdown(f"### {selected_name} **{selected_code}**")
+            with _toggle_col:
+                _btn_label = "📉 隐藏K线" if st.session_state.show_kline_pool else "📈 显示K线"
+                if st.button(_btn_label, key="toggle_kline_pool", use_container_width=True):
+                    st.session_state.show_kline_pool = not st.session_state.show_kline_pool
+                    st.rerun()
+
+            with st.spinner(f"正在加载 {selected_code} K线..."):
+                daily = get_stock_daily(selected_code, days=120)
+
+            if daily.empty or len(daily) < 30:
+                st.error("数据不足，无法绘制K线图。")
             else:
-                st.metric("换手率", "N/A")
+                signal_info = get_latest_signal(daily)
+                sig = signal_info["signal"]
+
+                # 信号卡片 + 指标
+                if sig == "BUY":
+                    css_class = "signal-buy"
+                    icon = "🔴"  # 中国股市：涨用红色
+                    sig_label = "建仓信号"
+                    sig_color = "#dc3545"  # 红色
+                elif sig == "SELL":
+                    css_class = "signal-sell"
+                    icon = "🟢"  # 中国股市：跌用绿色
+                    sig_label = "风险信号"
+                    sig_color = "#28a745"  # 绿色
+                else:
+                    css_class = "signal-hold"
+                    icon = "⚪"
+                    sig_label = "观望"
+                    sig_color = "#6c757d"
+
+                sig_col, ind_col = st.columns([1.5, 3])
+
+                with sig_col:
+                    # 构建建仓价格提示
+                    _price_html = ""
+                    if sig == "BUY" and signal_info.get("suggest_price"):
+                        _price_html = (
+                            f'<div style="margin-top:10px; padding-top:8px; border-top:1px dashed rgba(220,53,69,0.3);">'
+                            f'<div style="font-size:0.8em; color:#dc3545; font-weight:600;">💰 建议建仓价</div>'
+                            f'<div style="font-size:1.4em; font-weight:900; color:#8b1a1a; margin:2px 0;">'
+                            f'¥{signal_info["suggest_price"]:.2f}</div>'
+                            f'<div style="font-size:0.72em; color:#666; margin-top:4px;">'
+                            f'激进: ¥{signal_info["aggressive_price"]:.2f} &nbsp;|&nbsp; '
+                            f'保守: ¥{signal_info["conservative_price"]:.2f}</div>'
+                            f'</div>'
+                        )
+                    st.markdown(
+                        f'<div class="signal-card {css_class}">'
+                        f'<div class="signal-icon">{icon}</div>'
+                        f'<div class="signal-text" style="color:{sig_color};">{sig_label}</div>'
+                        f'<div class="signal-sub">{signal_info["text"]}</div>'
+                        f'<div class="signal-sub" style="margin-top:6px;">'
+                        f'收盘价 &nbsp;<b style="font-size:1.2em; color:#1a1a2e;">{signal_info["close"]:.2f}</b>'
+                        f'</div>'
+                        f'{_price_html}'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+
+                with ind_col:
+                    ic1, ic2, ic3 = st.columns(3)
+                    with ic1:
+                        st.metric("🟠 MA5", f"{signal_info['ma_short']:.2f}")
+                    with ic2:
+                        st.metric("🔵 MA20", f"{signal_info['ma_long']:.2f}")
+                    with ic3:
+                        boll_width = signal_info['boll_upper'] - signal_info['boll_lower']
+                        st.metric("📏 布林带宽", f"{boll_width:.2f}")
+
+                # K线图（根据切换状态显示/隐藏）
+                if st.session_state.show_kline_pool:
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    fig = plot_kline(daily, selected_code, selected_name)
+                    st.pyplot(fig)
+
+                    # 底部关键数据
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    latest = daily.iloc[-1]
+                    d1, d2, d3, d4, d5 = st.columns(5)
+                    with d1:
+                        pct = latest.get("pct_change", 0)
+                        st.metric("涨跌幅", f"{pct:.2f}%", delta=f"{pct:.2f}%" if pct else None)
+                    with d2:
+                        st.metric("振幅", f"{latest.get('amplitude', 0):.2f}%")
+                    with d3:
+                        vol = latest.get('volume', 0)
+                        if vol >= 1e8:
+                            st.metric("成交量", f"{vol/1e8:.2f}亿")
+                        else:
+                            st.metric("成交量", f"{vol/1e4:.1f}万")
+                    with d4:
+                        st.metric("收盘价", f"{latest['close']:.2f}")
+                    with d5:
+                        turnover = latest.get('turnover', None)
+                        if turnover is not None and pd.notna(turnover):
+                            st.metric("换手率", f"{turnover:.2f}%")
+                        else:
+                            st.metric("换手率", "N/A")
+
+# ══════════════════════════════════════════════
+#  Tab 2: 自选股
+# ══════════════════════════════════════════════
+with tab_watch:
+    watchlist = load_watchlist()
+
+    # ── 顶部标题栏 ──
+    wh_col1, wh_col2 = st.columns([3, 1])
+    with wh_col1:
+        st.markdown(
+            f'<div style="display:flex; align-items:center; gap:12px; margin-bottom:8px;">'
+            f'<div style="font-size:1.6em; font-weight:800; color:#1a1a2e;">⭐ 自选股</div>'
+            f'<div style="background:#f59e0b; color:white; padding:3px 12px; border-radius:20px; "'
+            f'font-size:0.8em; font-weight:600;">{today_display} {weekday}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+    with wh_col2:
+        st.markdown(
+            f'<div style="text-align:right; color:#888; font-size:0.85em; padding-top:8px;">'
+            f'共 <b style="color:#f59e0b; font-size:1.2em;">{len(watchlist)}</b> 只自选'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    if watchlist.empty:
+        st.info("暂无自选股，请在左侧「⭐ 自选股管理」中添加。")
+    else:
+        # K线显示/隐藏切换
+        if "show_kline_watch" not in st.session_state:
+            st.session_state.show_kline_watch = True
+
+        # ── 左右分栏（根据K线显示状态调整比例）──
+        if st.session_state.show_kline_watch:
+            wcol_left, wcol_right = st.columns([1.3, 2], gap="large")
+        else:
+            wcol_left, wcol_right = st.columns([1, 1], gap="large")
+
+        with wcol_left:
+            st.markdown(
+                '<div class="section-title">'
+                '<div class="icon">⭐</div>'
+                '<span>自选股列表</span>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+
+            # 构建展示表格
+            watch_display = watchlist[["code", "name"]].copy()
+            watch_display.columns = ["代码", "名称"]
+            watch_display = watch_display.reset_index(drop=True)
+            watch_display.index += 1
+
+            _w_list_height = 420 if st.session_state.show_kline_watch else 520
+            watch_idx = st.dataframe(
+                watch_display,
+                use_container_width=True,
+                on_select="rerun",
+                selection_mode="single-row",
+                height=_w_list_height,
+            )
+
+            if watch_idx.selection.rows:
+                st.session_state.watch_row = watch_idx.selection.rows[0]
+
+            _wrow = st.session_state.get("watch_row", 0)
+            if _wrow < len(watchlist):
+                w_code = str(watchlist.iloc[_wrow]["code"]).zfill(6)
+                w_name = str(watchlist.iloc[_wrow]["name"])
+            else:
+                w_code = str(watchlist.iloc[0]["code"]).zfill(6)
+                w_name = str(watchlist.iloc[0]["name"])
+
+        with wcol_right:
+            # 股票标题 + K线切换按钮
+            _w_title_col, _w_toggle_col = st.columns([3, 1])
+            with _w_title_col:
+                st.markdown(f"### {w_name} **{w_code}**")
+            with _w_toggle_col:
+                _w_btn_label = "📉 隐藏K线" if st.session_state.show_kline_watch else "📈 显示K线"
+                if st.button(_w_btn_label, key="toggle_kline_watch", use_container_width=True):
+                    st.session_state.show_kline_watch = not st.session_state.show_kline_watch
+                    st.rerun()
+
+            with st.spinner(f"正在加载 {w_code} K线..."):
+                w_daily = get_stock_daily(w_code, days=120)
+
+            if w_daily.empty or len(w_daily) < 30:
+                st.error("数据不足，无法绘制K线图。")
+            else:
+                w_signal = get_latest_signal(w_daily)
+                w_sig = w_signal["signal"]
+
+                if w_sig == "BUY":
+                    w_css = "signal-buy"
+                    w_icon = "🔴"  # 中国股市：涨用红色
+                    w_sig_label = "建仓信号"
+                    w_sig_color = "#dc3545"  # 红色
+                elif w_sig == "SELL":
+                    w_css = "signal-sell"
+                    w_icon = "🟢"  # 中国股市：跌用绿色
+                    w_sig_label = "风险信号"
+                    w_sig_color = "#28a745"  # 绿色
+                else:
+                    w_css = "signal-hold"
+                    w_icon = "⚪"
+                    w_sig_label = "观望"
+                    w_sig_color = "#6c757d"
+
+                w_sig_col, w_ind_col = st.columns([1.5, 3])
+
+                with w_sig_col:
+                    # 构建建仓价格提示
+                    _w_price_html = ""
+                    if w_sig == "BUY" and w_signal.get("suggest_price"):
+                        _w_price_html = (
+                            f'<div style="margin-top:10px; padding-top:8px; border-top:1px dashed rgba(220,53,69,0.3);">'
+                            f'<div style="font-size:0.8em; color:#dc3545; font-weight:600;">💰 建议建仓价</div>'
+                            f'<div style="font-size:1.4em; font-weight:900; color:#8b1a1a; margin:2px 0;">'
+                            f'¥{w_signal["suggest_price"]:.2f}</div>'
+                            f'<div style="font-size:0.72em; color:#666; margin-top:4px;">'
+                            f'激进: ¥{w_signal["aggressive_price"]:.2f} &nbsp;|&nbsp; '
+                            f'保守: ¥{w_signal["conservative_price"]:.2f}</div>'
+                            f'</div>'
+                        )
+                    st.markdown(
+                        f'<div class="signal-card {w_css}">'
+                        f'<div class="signal-icon">{w_icon}</div>'
+                        f'<div class="signal-text" style="color:{w_sig_color};">{w_sig_label}</div>'
+                        f'<div class="signal-sub">{w_signal["text"]}</div>'
+                        f'<div class="signal-sub" style="margin-top:6px;">'
+                        f'收盘价 &nbsp;<b style="font-size:1.2em; color:#1a1a2e;">{w_signal["close"]:.2f}</b>'
+                        f'</div>'
+                        f'{_w_price_html}'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+
+                with w_ind_col:
+                    wic1, wic2, wic3 = st.columns(3)
+                    with wic1:
+                        st.metric("🟠 MA5", f"{w_signal['ma_short']:.2f}")
+                    with wic2:
+                        st.metric("🔵 MA20", f"{w_signal['ma_long']:.2f}")
+                    with wic3:
+                        w_boll_w = w_signal['boll_upper'] - w_signal['boll_lower']
+                        st.metric("📏 布林带宽", f"{w_boll_w:.2f}")
+
+                # K线图（根据切换状态显示/隐藏）
+                if st.session_state.show_kline_watch:
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    w_fig = plot_kline(w_daily, w_code, w_name)
+                    st.pyplot(w_fig)
+
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    w_latest = w_daily.iloc[-1]
+                    wd1, wd2, wd3, wd4, wd5 = st.columns(5)
+                    with wd1:
+                        w_pct = w_latest.get("pct_change", 0)
+                        st.metric("涨跌幅", f"{w_pct:.2f}%", delta=f"{w_pct:.2f}%" if w_pct else None)
+                    with wd2:
+                        st.metric("振幅", f"{w_latest.get('amplitude', 0):.2f}%")
+                    with wd3:
+                        w_vol = w_latest.get('volume', 0)
+                        if w_vol >= 1e8:
+                            st.metric("成交量", f"{w_vol/1e8:.2f}亿")
+                        else:
+                            st.metric("成交量", f"{w_vol/1e4:.1f}万")
+                    with wd4:
+                        st.metric("收盘价", f"{w_latest['close']:.2f}")
+                    with wd5:
+                        w_turnover = w_latest.get('turnover', None)
+                        if w_turnover is not None and pd.notna(w_turnover):
+                            st.metric("换手率", f"{w_turnover:.2f}%")
+                        else:
+                            st.metric("换手率", "N/A")

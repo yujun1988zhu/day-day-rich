@@ -72,26 +72,26 @@ def plot_kline(df: pd.DataFrame, code: str, name: str = ""):
         returnfig=True,
     )
 
-    # 标注买入信号
+    # 标注买入信号（中国市场：红色）
     for idx, row in buy_signals.iterrows():
         axes[0].annotate(
             row["signal_text"],
             xy=(row.name, row["low"] * 0.995),
-            fontsize=7, color="#27ae60", fontweight="bold",
+            fontsize=7, color="#e74c3c", fontweight="bold",
             ha="center", va="top",
-            arrowprops=dict(arrowstyle="->", color="#27ae60", lw=1.5),
-            bbox=dict(boxstyle="round,pad=0.3", fc="#e8f5e9", ec="#27ae60", alpha=0.9),
+            arrowprops=dict(arrowstyle="->", color="#e74c3c", lw=1.5),
+            bbox=dict(boxstyle="round,pad=0.3", fc="#fff3f3", ec="#e74c3c", alpha=0.9),
         )
 
-    # 标注卖出信号
+    # 标注卖出信号（中国市场：绿色）
     for idx, row in sell_signals.iterrows():
         axes[0].annotate(
             row["signal_text"],
             xy=(row.name, row["high"] * 1.005),
-            fontsize=7, color="#e74c3c", fontweight="bold",
+            fontsize=7, color="#27ae60", fontweight="bold",
             ha="center", va="bottom",
-            arrowprops=dict(arrowstyle="->", color="#e74c3c", lw=1.5),
-            bbox=dict(boxstyle="round,pad=0.3", fc="#fff3f3", ec="#e74c3c", alpha=0.9),
+            arrowprops=dict(arrowstyle="->", color="#27ae60", lw=1.5),
+            bbox=dict(boxstyle="round,pad=0.3", fc="#e8f5e9", ec="#27ae60", alpha=0.9),
         )
 
     return fig

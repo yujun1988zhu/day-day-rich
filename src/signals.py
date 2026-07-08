@@ -84,7 +84,7 @@ def get_latest_signal(df: pd.DataFrame) -> dict:
             "date": ""
         }
     last = df.iloc[-1]
-    return {
+    result = {
         "signal": last["signal"] if last["signal"] else "HOLD",
         "text": last["signal_text"] if last["signal_text"] else "无操作",
         "date": str(last["date"]),
@@ -94,3 +94,25 @@ def get_latest_signal(df: pd.DataFrame) -> dict:
         "boll_upper": round(last["boll_upper"], 2),
         "boll_lower": round(last["boll_lower"], 2),
     }
+
+    # 计算建议建仓价格
+    if result["signal"] == "BUY":
+        close = last["close"]
+        ma5 = last["ma_short"]
+        ma20 = last["ma_long"]
+        boll_lower = last["boll_lower"]
+        # 理想建仓价：MA5与布林下轨之间的较高者（支撑位附近）
+        support = max(ma5, boll_lower)
+        # 激进价：当前收盘价附近（适合突破型信号）
+        aggressive = round(close * 0.998, 2)
+        # 保守价：MA20附近（适合金叉型信号，等回踩）
+        conservative = round(ma20, 2)
+        result["suggest_price"] = round(support, 2)
+        result["aggressive_price"] = aggressive
+        result["conservative_price"] = conservative
+    else:
+        result["suggest_price"] = None
+        result["aggressive_price"] = None
+        result["conservative_price"] = None
+
+    return result

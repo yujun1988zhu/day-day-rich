@@ -22,3 +22,5 @@ FACTOR_WEIGHTS = {
 }
 
 ROE_THRESHOLD = 8.0
+
+WATCHLIST_FILE = os.path.join(DATA_DIR, "watchlist.csv")

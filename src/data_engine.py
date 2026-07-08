@@ -5,7 +5,7 @@ import datetime
 import urllib.request
 import urllib.parse
 import pandas as pd
-from config import DATA_DIR, CACHE_DAYS
+from config import DATA_DIR, CACHE_DAYS, WATCHLIST_FILE
 
 # 通用请求头（模拟浏览器）
 _HEADERS = {
@@ -498,3 +498,91 @@ def get_stock_daily(code: str, days: int = CACHE_DAYS) -> pd.DataFrame:
 
     df.to_csv(cache_file, index=False)
     return df.tail(days)
+
+
+# ── 自选股管理 ──
+def load_watchlist() -> pd.DataFrame:
+    """加载自选股列表"""
+    ensure_data_dir()
+    if not os.path.exists(WATCHLIST_FILE):
+        return pd.DataFrame(columns=["code", "name", "add_date"])
+    try:
+        df = pd.read_csv(WATCHLIST_FILE, dtype={"code": str})
+        return df
+    except Exception:
+        return pd.DataFrame(columns=["code", "name", "add_date"])
+
+
+def add_to_watchlist(code: str, name: str = "") -> bool:
+    """
+    添加股票到自选列表
+    
+    参数:
+        code: 股票代码（6位）
+        name: 股票名称（可选，如不提供则自动获取）
+    
+    返回:
+        bool: 是否成功添加
+    """
+    ensure_data_dir()
+    code = str(code).zfill(6)
+    
+    # 如果未提供名称，尝试从腾讯API获取
+    if not name:
+        try:
+            symbol = _code_to_symbol(code)
+            url = f"https://qt.gtimg.cn/q={symbol}"
+            req = urllib.request.Request(url, headers=_HEADERS)
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                raw = resp.read().decode("gbk")
+            if "~" in raw:
+                fields = raw.split("~")
+                if len(fields) >= 2:
+                    name = fields[1]
+        except Exception:
+            name = f"股票{code}"
+    
+    # 加载现有列表
+    watchlist = load_watchlist()
+    
+    # 检查是否已存在
+    if code in watchlist["code"].values:
+        return False
+    
+    # 添加新记录
+    today = datetime.date.today().strftime("%Y-%m-%d")
+    new_row = pd.DataFrame([{
+        "code": code,
+        "name": name,
+        "add_date": today
+    }])
+    watchlist = pd.concat([watchlist, new_row], ignore_index=True)
+    
+    # 保存
+    watchlist.to_csv(WATCHLIST_FILE, index=False)
+    return True
+
+
+def remove_from_watchlist(code: str) -> bool:
+    """
+    从自选列表中移除股票
+    
+    参数:
+        code: 股票代码（6位）
+    
+    返回:
+        bool: 是否成功移除
+    """
+    watchlist = load_watchlist()
+    if code not in watchlist["code"].values:
+        return False
+    
+    watchlist = watchlist[watchlist["code"] != code]
+    watchlist.to_csv(WATCHLIST_FILE, index=False)
+    return True
+
+
+def get_watchlist_codes() -> list:
+    """获取自选股代码列表"""
+    watchlist = load_watchlist()
+    return watchlist["code"].tolist()
