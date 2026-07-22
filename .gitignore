@@ -4,3 +4,15 @@ __pycache__/
 *.pyc
 .idea/
 *.csv
+
+# Build artifacts
+build/
+dist/
+AlphaScanner.spec
+AlphaScanner_Release/
+
+# Binary files
+*.exe
+*.zip
+*.pkg
+*.pyz
