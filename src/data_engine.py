@@ -385,6 +385,73 @@ def _fetch_realtime_quote(code: str) -> dict | None:
         return None
 
 
+def fetch_intraday_data(code: str) -> pd.DataFrame:
+    """获取单只股票当日分时数据（分钟级）
+
+    数据源: 腾讯财经分时API (web.ifzq.gtimg.cn/appstock/app/minute/query)
+    返回字段: time, price, volume, amount, avg_price, prev_close
+    """
+    symbol = _code_to_symbol(code)
+    url = f"https://web.ifzq.gtimg.cn/appstock/app/minute/query?code={symbol}"
+    try:
+        req = urllib.request.Request(url, headers=_HEADERS)
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+
+        stock_data = data.get("data", {}).get(symbol, {})
+        qt = stock_data.get("qt", {}).get(symbol, [])
+        inner = stock_data.get("data", {})
+        entries = inner.get("data", [])
+
+        if not entries:
+            return pd.DataFrame()
+
+        # 从qt获取昨收价
+        prev_close = float(qt[4]) if len(qt) > 4 and qt[4] else 0
+        name = qt[1] if len(qt) > 1 else ""
+
+        rows = []
+        cumulative_vol = 0
+        for entry in entries:
+            parts = entry.split()
+            if len(parts) < 4:
+                continue
+            time_str = parts[0]  # "HHMM"
+            price = float(parts[1])
+            vol = float(parts[2])  # 累计成交量(手)
+            amount = float(parts[3])  # 累计成交额(元)
+
+            # 计算当分钟成交量
+            minute_vol = vol - cumulative_vol
+            cumulative_vol = vol
+
+            # 时间格式化 HH:MM
+            hh = time_str[:2]
+            mm = time_str[2:]
+            time_fmt = f"{hh}:{mm}"
+
+            # 计算均价
+            avg_price = amount / (vol * 100) if vol > 0 else price
+
+            rows.append({
+                "time": time_fmt,
+                "price": price,
+                "volume": minute_vol,
+                "amount": amount,
+                "avg_price": round(avg_price, 2),
+                "prev_close": prev_close,
+            })
+
+        df = pd.DataFrame(rows)
+        df.attrs["name"] = name
+        df.attrs["prev_close"] = prev_close
+        return df
+
+    except Exception as e:
+        print(f"[WARN] 获取 {code} 分时数据失败: {e}")
+        return pd.DataFrame()
+
+
 def get_stock_daily(code: str, days: int = CACHE_DAYS) -> pd.DataFrame:
     """获取单只股票近N个交易日的日线数据(OHLCV)
 

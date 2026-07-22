@@ -1,43 +1,45 @@
 import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
+import matplotlib.pyplot as plt
 import os
 import time
 import datetime
 from config import DATA_DIR, TOP_N
-from src.data_engine import get_stock_list, get_stock_daily, get_roe_data, is_trading_hours, load_watchlist, add_to_watchlist, remove_from_watchlist
+from src.data_engine import get_stock_list, get_stock_daily, get_roe_data, is_trading_hours, load_watchlist, add_to_watchlist, remove_from_watchlist, fetch_intraday_data
 from src.factor import scan_universe
 from src.signals import get_latest_signal
-from src.chart import plot_kline
+from src.chart import plot_kline, plot_intraday
 
 # 自动刷新间隔（秒）
 AUTO_REFRESH_INTERVAL = 300  # 5分钟
+INTRADAY_REFRESH_INTERVAL = 10  # 分时图10秒刷新
 
 # 页面配置
-st.set_page_config(page_title="AlphaScanner 极简选股预警器", layout="wide", page_icon="📈")
+st.set_page_config(page_title="AlphaScanner // stock monitor", layout="wide", page_icon="▓")
 
 # ── 自定义样式 ──
 st.markdown("""
 <style>
-/* ═══ 全局 ═══ */
+/* ═══ 全局 - 终端监控风格 ═══ */
 html, body, [class*="css"] {
-    font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+    font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', 'Courier New', monospace;
 }
 .block-container { padding-top: 1.5rem; }
 
 /* ═══ 侧边栏 ═══ */
 section[data-testid="stSidebar"] {
-    background: linear-gradient(180deg, #0f0c29 0%, #1a1a3e 40%, #24243e 100%);
+    background: #0a0e14;
+    border-right: 1px solid #1a2332;
 }
 section[data-testid="stSidebar"] .stMarkdown p,
 section[data-testid="stSidebar"] .stMarkdown li {
-    color: #c8d0da;
+    color: #8b949e;
 }
 section[data-testid="stSidebar"] h1,
 section[data-testid="stSidebar"] h2 {
-    color: #00d4ff;
+    color: #00ff41;
 }
-/* 侧边栏 expander 内所有文字/表格 */
 section[data-testid="stSidebar"] .stExpander,
 section[data-testid="stSidebar"] .stExpander p,
 section[data-testid="stSidebar"] .stExpander li,
@@ -45,91 +47,96 @@ section[data-testid="stSidebar"] .stExpander td,
 section[data-testid="stSidebar"] .stExpander th,
 section[data-testid="stSidebar"] .stExpander strong,
 section[data-testid="stSidebar"] .stExpander span {
-    color: #d0d8e4 !important;
+    color: #8b949e !important;
 }
 section[data-testid="stSidebar"] .stExpander table {
-    border-color: #3a3a5e !important;
+    border-color: #1a2332 !important;
 }
 section[data-testid="stSidebar"] .stExpander th {
-    background: rgba(255,255,255,0.08) !important;
+    background: rgba(0,255,65,0.05) !important;
 }
 section[data-testid="stSidebar"] .stExpander td {
-    border-color: #3a3a5e !important;
+    border-color: #1a2332 !important;
 }
 section[data-testid="stSidebar"] hr {
-    border-color: #3a3a5e;
+    border-color: #1a2332;
 }
 
-/* ═══ 指标卡片 ═══ */
+/* ═══ 指标卡片 - 终端风格 ═══ */
 div[data-testid="stMetric"] {
-    background: linear-gradient(135deg, #f5f7fa 0%, #eef1f5 100%);
-    border-radius: 12px;
-    padding: 14px 18px;
-    border-left: 4px solid #4361ee;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-    transition: transform 0.15s;
-}
-div[data-testid="stMetric"]:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 14px rgba(67,97,238,0.15);
+    background: #161b22;
+    border-radius: 4px;
+    padding: 12px 16px;
+    border-left: 3px solid #00ff41;
+    border: 1px solid #1a2332;
+    border-left: 3px solid #00ff41;
+    box-shadow: none;
 }
 div[data-testid="stMetric"] label {
-    color: #6c757d !important;
-    font-size: 0.82em !important;
-    font-weight: 600 !important;
+    color: #8b949e !important;
+    font-size: 0.78em !important;
+    font-weight: 500 !important;
     text-transform: uppercase;
-    letter-spacing: 0.5px;
+    letter-spacing: 1px;
+    font-family: 'Cascadia Code', 'Consolas', monospace !important;
 }
 div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
-    color: #1a1a2e !important;
-    font-weight: 800 !important;
-    font-size: 1.4em !important;
+    color: #00ff41 !important;
+    font-weight: 700 !important;
+    font-size: 1.3em !important;
+    font-family: 'Cascadia Code', 'Consolas', monospace !important;
 }
 
-/* ═══ 信号卡片 ═══ */
+/* ═══ 信号卡片 - 终端风格 ═══ */
 .signal-card {
-    border-radius: 12px;
-    padding: 18px 20px;
+    border-radius: 4px;
+    padding: 16px 18px;
     position: relative;
-    overflow: hidden;
+    border: 1px solid #1a2332;
+    font-family: 'Cascadia Code', 'Consolas', monospace;
 }
 .signal-card::before {
     content: '';
     position: absolute;
     top: 0; left: 0;
-    width: 5px; height: 100%;
+    width: 3px; height: 100%;
 }
 .signal-buy {
-    background: linear-gradient(135deg, #fff3f3 0%, #fde2e2 100%);
+    background: #1a1010;
+    border-color: #f8514966;
 }
-.signal-buy::before { background: #dc3545; }
+.signal-buy::before { background: #f85149; }
 .signal-sell {
-    background: linear-gradient(135deg, #e8f5e9 0%, #d4edda 100%);
+    background: #0d1a0d;
+    border-color: #3fb95044;
 }
-.signal-sell::before { background: #28a745; }
+.signal-sell::before { background: #3fb950; }
 .signal-hold {
-    background: linear-gradient(135deg, #f8f9fa 0%, #eef1f5 100%);
+    background: #161b22;
+    border-color: #1a2332;
 }
-.signal-hold::before { background: #6c757d; }
+.signal-hold::before { background: #484f58; }
 
 .signal-icon {
-    font-size: 1.8em;
+    font-size: 1.5em;
     line-height: 1;
     margin-bottom: 4px;
 }
 .signal-text {
-    font-size: 1.1em;
+    font-size: 1.05em;
     font-weight: 700;
     margin-bottom: 2px;
+    font-family: 'Cascadia Code', 'Consolas', monospace;
 }
 .signal-sub {
-    font-size: 0.85em;
-    color: #666;
+    font-size: 0.82em;
+    color: #8b949e;
+    font-family: 'Cascadia Code', 'Consolas', monospace;
 }
 
 /* ═══ 表格 ═══ */
-div[data-testid="stDataFrame"] { border-radius: 10px; overflow: hidden; }
-div[data-testid="stDataFrame"] tr:hover { background-color: #e8f0fe !important; }
+div[data-testid="stDataFrame"] { border-radius: 4px; overflow: hidden; border: 1px solid #1a2332; }
+div[data-testid="stDataFrame"] tr:hover { background-color: #1a2332 !important; }
 
 /* ═══ 标题装饰 ═══ */
 .section-title {
@@ -139,16 +146,18 @@ div[data-testid="stDataFrame"] tr:hover { background-color: #e8f0fe !important; 
     margin-bottom: 12px;
 }
 .section-title .icon {
-    width: 32px; height: 32px;
-    background: linear-gradient(135deg, #4361ee, #3a0ca3);
-    border-radius: 8px;
+    width: 28px; height: 28px;
+    background: #161b22;
+    border: 1px solid #00ff41;
+    border-radius: 4px;
     display: flex; align-items: center; justify-content: center;
-    color: white; font-size: 16px;
+    color: #00ff41; font-size: 14px;
 }
 .section-title span {
-    font-size: 1.1em;
-    font-weight: 700;
-    color: #1a1a2e;
+    font-size: 1.05em;
+    font-weight: 600;
+    color: #c9d1d9;
+    font-family: 'Cascadia Code', 'Consolas', monospace;
 }
 
 /* ═══ 隐藏 footer ═══ */
@@ -163,18 +172,42 @@ deploy-button, [data-testid="stDeployButton"] {
     display: none !important;
 }
 
-/* ═══ Tab 标签区域增加顶部间距，避免与上方标题遮挡 ══ */
+/* ═══ Tab ═══ */
 .stTabs {
     margin-top: 20px;
+}
+.stTabs [data-baseweb="tab-list"] {
+    gap: 0;
+}
+.stTabs [data-baseweb="tab"] {
+    background: #161b22;
+    border: 1px solid #1a2332;
+    border-radius: 4px 4px 0 0;
+    color: #8b949e;
+    font-family: 'Cascadia Code', 'Consolas', monospace;
+}
+.stTabs [aria-selected="true"] {
+    background: #0d1117 !important;
+    border-bottom: 2px solid #00ff41 !important;
+    color: #00ff41 !important;
 }
 
 /* ═══ 数据卡片 ═══ */
 .data-card {
-    background: white;
-    border-radius: 12px;
+    background: #161b22;
+    border-radius: 4px;
     padding: 16px;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.06);
-    border: 1px solid #e8ecf1;
+    border: 1px solid #1a2332;
+}
+
+/* ═══ Spinner ═══ */
+.stSpinner > div {
+    border-top-color: #00ff41 !important;
+}
+
+/* ═══ 进度条 ═══ */
+.stProgress > div > div {
+    background-color: #00ff41 !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -183,43 +216,46 @@ deploy-button, [data-testid="stDeployButton"] {
 with st.sidebar:
     st.markdown("""
     <div style="text-align:center; padding: 10px 0 5px;">
-        <div style="font-size:2em; font-weight:900; color:#00d4ff; letter-spacing:2px;">
-            📈 AlphaScanner
+        <div style="font-size:0.75em; color:#484f58; font-family:monospace; letter-spacing:1px;">
+            ┌─────────────────────────────┐
         </div>
-        <div style="font-size:0.85em; color:#7b8ca3; margin-top:2px;">
-            极简选股预警器 &nbsp;·&nbsp; V1.0
+        <div style="font-size:1.6em; font-weight:900; color:#00ff41; letter-spacing:3px; font-family:monospace;">
+            ▓ AlphaScanner
+        </div>
+        <div style="font-size:0.72em; color:#484f58; margin-top:2px; font-family:monospace;">
+            └── stock monitor v1.0 ──┘
         </div>
     </div>
     """, unsafe_allow_html=True)
 
     st.markdown("---")
 
-    action = st.button("🔄 刷新全市场数据", use_container_width=True, type="primary")
+    action = st.button("▶ REFRESH_MARKET_DATA", use_container_width=True, type="primary")
 
     # 交易状态指示
     _now = datetime.datetime.now()
     _is_trade_day = _now.weekday() < 5
     _t = _now.time()
     if not _is_trade_day:
-        _status_text = "📴 今日休市"
-        _status_color = "#8899aa"
+        _status_text = "[OFFLINE] MARKET_CLOSED"
+        _status_color = "#484f58"
     elif is_trading_hours():
-        _status_text = "🟢 交易时段 · 实时数据"
-        _status_color = "#28a745"
+        _status_text = "[LIVE] TRADING_SESSION"
+        _status_color = "#00ff41"
     elif _t < datetime.time(9, 30):
-        _status_text = "🟡 盘前 · 昨日数据"
-        _status_color = "#ffc107"
+        _status_text = "[STANDBY] PRE_MARKET"
+        _status_color = "#d29922"
     elif datetime.time(11, 30) < _t < datetime.time(13, 0):
-        _status_text = "☕ 午间休市 · 上午数据"
-        _status_color = "#ffc107"
+        _status_text = "[PAUSED] LUNCH_BREAK"
+        _status_color = "#d29922"
     else:
-        _status_text = "🔵 已收盘 · 今日数据"
-        _status_color = "#4361ee"
+        _status_text = "[CLOSED] POST_MARKET"
+        _status_color = "#58a6ff"
 
     st.markdown(
-        f'<div style="text-align:center; padding:6px; background:rgba(255,255,255,0.06); '
-        f'border-radius:8px; margin-bottom:4px;">'
-        f'<span style="color:{_status_color}; font-size:0.85em; font-weight:600;">{_status_text}</span>'
+        f'<div style="text-align:center; padding:6px; background:#161b22; '
+        f'border:1px solid #1a2332; border-radius:4px; margin-bottom:4px; font-family:monospace;">'
+        f'<span style="color:{_status_color}; font-size:0.82em; font-weight:600; font-family:monospace;">{_status_text}</span>'
         f'</div>',
         unsafe_allow_html=True,
     )
@@ -231,11 +267,11 @@ with st.sidebar:
     _interval_ms = AUTO_REFRESH_INTERVAL * 1000
 
     st.components.v1.html(
-        f'''<div style="text-align:center; padding:8px; background:rgba(255,255,255,0.06);
-            border-radius:8px; margin-top:4px;">
-            <div style="color:#8899aa; font-size:0.82em;">⏱️ 自动刷新</div>
-            <div id="cd" style="color:#00d4ff; font-weight:700; font-size:1.2em;
-                 font-family:monospace; margin-top:2px;">--:--</div>
+        f'''<div style="text-align:center; padding:8px; background:#161b22;
+            border:1px solid #1a2332; border-radius:4px; margin-top:4px; font-family:monospace;">
+            <div style="color:#484f58; font-size:0.78em; font-family:monospace;">AUTO_REFRESH</div>
+            <div id="cd" style="color:#00ff41; font-weight:700; font-size:1.2em;
+                 font-family:'Cascadia Code','Consolas',monospace; margin-top:2px;">--:--</div>
         </div>
         <script>
         (function() {{
@@ -257,7 +293,7 @@ with st.sidebar:
     st.markdown("---")
 
     # ── 自选股管理 ──
-    with st.expander("⭐ 自选股管理", expanded=True):
+    with st.expander("[+] WATCHLIST_MANAGER", expanded=True):
         _wl = load_watchlist()
         if not _wl.empty:
             st.markdown(f"当前 **{len(_wl)}** 只自选股：")
@@ -276,9 +312,9 @@ with st.sidebar:
 
         st.markdown("")
         with st.form("add_watchlist_form"):
-            new_code = st.text_input("输入股票代码（6位）", placeholder="如 600519", max_chars=6)
-            new_name = st.text_input("股票名称（可选）", placeholder="留空自动获取")
-            if st.form_submit_button("➕ 添加到自选", use_container_width=True):
+            new_code = st.text_input("STOCK_CODE", placeholder="e.g. 600519", max_chars=6)
+            new_name = st.text_input("STOCK_NAME (optional)", placeholder="auto-detect if empty")
+            if st.form_submit_button("[+] ADD_TO_WATCHLIST", use_container_width=True):
                 if new_code and len(new_code.strip()) == 6:
                     ok = add_to_watchlist(new_code.strip(), new_name.strip())
                     if ok:
@@ -293,28 +329,28 @@ with st.sidebar:
 
     # 侧边栏底部说明
     st.markdown("<br><br>", unsafe_allow_html=True)
-    with st.expander("📊 因子权重说明"):
+    with st.expander("[i] FACTOR_WEIGHTS"):
         st.markdown("""
-        | 因子 | 权重 | 逻辑 |
-        |:---:|:---:|:---|
-        | 🚀 动量 | **30%** | 20日涨幅，强者恒强 |
-        | 💰 估值 | **30%** | PB 越低加分越多 |
-        | 📉 波动 | **20%** | 振幅/换手率，剔除僵尸股 |
-        | 📊 ROE | **20%** | 净资产收益率 >8% 加分 |
+| FACTOR | WEIGHT | LOGIC |
+|:---:|:---:|:---|
+| TREND | **35%** | 60d趋势强度 + 20d/60d一致性 + 过热惩罚 |
+| MOM_ACCEL | **25%** | 近期动量 vs 长期动量加速度 |
+| VALUATION | **20%** | PE/PB合理区间评分(非越低越好) |
+| FUNDAMENTAL | **20%** | ROE绝对水平非线性映射 |
         """)
-    with st.expander("📋 技术指标说明"):
+    with st.expander("[i] TECH_INDICATORS"):
         st.markdown("""
-        **均线系统**
-        - 🟠 **MA5** — 5日均线（短期趋势）
-        - 🔵 **MA20** — 20日均线（中期趋势）
-        
-        **布林带**
-        - 灰色虚线: ±2σ 上下轨
-        - 紫色点线: 中轨
-        
-        **交易信号**
-        - 🔴 红色▲ 建仓信号（金叉/突破上轨）
-        - 🟢 绿色▼ 风险信号（死叉/跌破下轨）
+**Moving Averages**
+- `MA5` — 5-period (short-term)
+- `MA20` — 20-period (mid-term)
+
+**Bollinger Bands**
+- Dashed lines: ±2σ upper/lower
+- Dotted line: middle band
+
+**Signals**
+- RED ▲ BUY (golden cross / upper break)
+- GREEN ▼ SELL (death cross / lower break)
         """)
 
 # 文件路径
@@ -389,6 +425,50 @@ def load_or_scan():
     return pool
 
 
+# ── 分时走势图组件（10秒独立刷新） ──
+@st.fragment(run_every=INTRADAY_REFRESH_INTERVAL)
+def _intraday_pool(code: str, name: str, key_prefix: str):
+    """分时走势图 fragment，每10秒自动刷新"""
+    # 仅在交易日显示
+    now = datetime.datetime.now()
+    if now.weekday() >= 5:
+        return
+    t = now.time()
+    # 盘前9:15到收盘后15:05之间显示
+    if t < datetime.time(9, 15) or t > datetime.time(15, 5):
+        return
+
+    intraday_df = fetch_intraday_data(code)
+    if intraday_df.empty:
+        return
+
+    # 分时图标题栏
+    _now_str = now.strftime("%H:%M:%S")
+    _last_price = intraday_df["price"].iloc[-1]
+    _prev_close = intraday_df["prev_close"].iloc[0]
+    _pct = (_last_price - _prev_close) / _prev_close * 100 if _prev_close else 0
+    _pct_color = "#f85149" if _pct >= 0 else "#3fb950"
+
+    st.markdown(
+        f'<div style="display:flex; align-items:center; justify-content:space-between; '
+        f'margin:12px 0 6px; padding:6px 12px; background:#161b22; border:1px solid #1a2332; '
+        f'border-radius:4px; font-family:monospace;">'
+        f'<div style="font-size:0.9em; font-weight:600; color:#c9d1d9;">'
+        f'INTRADAY_TICK <span style="color:#484f58; font-size:0.8em;">({key_prefix})</span></div>'
+        f'<div style="display:flex; gap:16px; align-items:center;">'
+        f'<span style="color:{_pct_color}; font-weight:700; font-size:1.05em;">'
+        f'{_last_price:.2f} &nbsp; {_pct:+.2f}%</span>'
+        f'<span style="color:#484f58; font-size:0.75em;">更新: {_now_str}</span>'
+        f'</div></div>',
+        unsafe_allow_html=True,
+    )
+
+    fig = plot_intraday(intraday_df, code, name)
+    if fig:
+        st.pyplot(fig)
+        plt.close(fig)
+
+
 # ── 加载数据 ──
 if not os.path.exists(pool_file):
     pool = load_or_scan()
@@ -410,7 +490,7 @@ weekday_map = {0: "周一", 1: "周二", 2: "周三", 3: "周四", 4: "周五", 
 weekday = weekday_map[datetime.date.today().weekday()]
 
 # ── 主Tab切换 ──
-tab_pool, tab_watch = st.tabs(["🏆 今日候选池", "⭐ 自选股"])
+tab_pool, tab_watch = st.tabs(["[ CANDIDATE_POOL ]", "[ WATCHLIST ]"])
 
 # ══════════════════════════════════════════════
 #  Tab 1: 今日候选池
@@ -420,24 +500,24 @@ with tab_pool:
     header_col1, header_col2 = st.columns([3, 1])
     with header_col1:
         st.markdown(
-            f'<div style="display:flex; align-items:center; gap:12px; margin-bottom:8px;">'
-            f'<div style="font-size:1.6em; font-weight:800; color:#1a1a2e;">🏆 今日候选池</div>'
-            f'<div style="background:#4361ee; color:white; padding:3px 12px; border-radius:20px; "'
-            f'font-size:0.8em; font-weight:600;">{today_display} {weekday}</div>'
+            f'<div style="display:flex; align-items:center; gap:12px; margin-bottom:8px; font-family:monospace;">'
+            f'<div style="font-size:1.4em; font-weight:700; color:#c9d1d9; font-family:monospace;">$ CANDIDATE_POOL</div>'
+            f'<div style="background:#00ff41; color:#0d1117; padding:2px 10px; border-radius:2px; "'
+            f'font-size:0.75em; font-weight:700; font-family:monospace;">{today_display} {weekday}</div>'
             f'</div>',
             unsafe_allow_html=True,
         )
     with header_col2:
         st.markdown(
-            f'<div style="text-align:right; color:#888; font-size:0.85em; padding-top:8px;">'
-            f'共 <b style="color:#4361ee; font-size:1.2em;">{len(pool)}</b> 只候选 &nbsp;|&nbsp; '
-            f'Top {TOP_N}'
+            f'<div style="text-align:right; color:#484f58; font-size:0.82em; padding-top:8px; font-family:monospace;">'
+            f'count: <b style="color:#00ff41; font-size:1.1em;">{len(pool)}</b> &nbsp;|&nbsp; '
+            f'top_n={TOP_N}'
             f'</div>',
             unsafe_allow_html=True,
         )
 
     if pool.empty:
-        st.warning("暂无数据，请点击左侧「刷新全市场数据」按钮。")
+        st.warning("No data. Click [REFRESH_MARKET_DATA] in sidebar.")
     else:
         # 确保 TOP_N 生效（缓存可能包含旧数据）
         if len(pool) > TOP_N:
@@ -447,17 +527,16 @@ with tab_pool:
         st.markdown("---")
         m1, m2, m3, m4 = st.columns(4)
         with m1:
-            st.metric("📋 候选股票", f"{len(pool)} 只")
+            st.metric("CANDIDATES", f"{len(pool)}")
         with m2:
             top_score = pool["score"].max() if "score" in pool.columns else 0
-            st.metric("🏅 最高得分", f"{top_score:.1f}")
+            st.metric("MAX_SCORE", f"{top_score:.1f}")
         with m3:
-            avg_mom = pool["mom_20d"].mean() if "mom_20d" in pool.columns else 0
-            mom_delta = round(avg_mom - 0, 2)
-            st.metric("📈 平均20日涨幅", f"{avg_mom:.2f}%", delta=f"{mom_delta:+.2f}%")
+            avg_trend = pool["f_trend"].mean() if "f_trend" in pool.columns else 0
+            st.metric("AVG_TREND", f"{avg_trend:.1f}")
         with m4:
-            avg_pb = pool["pb"].mean() if "pb" in pool.columns else 0
-            st.metric("💰 平均PB", f"{avg_pb:.2f}")
+            avg_accel = pool["f_momentum_accel"].mean() if "f_momentum_accel" in pool.columns else 0
+            st.metric("AVG_ACCEL", f"{avg_accel:.1f}")
 
         st.markdown("<br>", unsafe_allow_html=True)
 
@@ -475,22 +554,28 @@ with tab_pool:
         with col_left:
             st.markdown(
                 '<div class="section-title">'
-                '<div class="icon">📋</div>'
-                '<span>候选池排名</span>'
+                '<div class="icon">#</div>'
+                '<span>RANKING</span>'
                 '</div>',
                 unsafe_allow_html=True,
             )
 
             display_cols = ["code", "name", "score"]
-            if "mom_20d" in pool.columns:
+            if "f_trend" in pool.columns:
+                display_cols.extend(["f_trend", "f_momentum_accel"])
+            elif "mom_20d" in pool.columns:
                 display_cols.append("mom_20d")
             display_cols.append("pb")
-            if "roe" in pool.columns:
-                display_cols.append("roe")
+            if "pe" in pool.columns:
+                display_cols.append("pe")
 
             display_pool = pool[display_cols].copy()
-            col_names = {"code": "代码", "name": "名称", "score": "得分",
-                         "mom_20d": "20日涨幅%", "pb": "PB", "roe": "ROE"}
+            col_names = {
+                "code": "CODE", "name": "NAME", "score": "SCORE",
+                "f_trend": "TREND", "f_momentum_accel": "MOM_ACCEL",
+                "f_valuation": "VALUE", "f_fundamental": "FUND",
+                "mom_20d": "MOM_20D%", "pb": "PB", "pe": "PE", "roe": "ROE",
+            }
             display_pool.columns = [col_names.get(c, c) for c in display_cols]
             display_pool = display_pool.round(2)
             display_pool = display_pool.reset_index(drop=True)
@@ -524,16 +609,16 @@ with tab_pool:
             with _title_col:
                 st.markdown(f"### {selected_name} **{selected_code}**")
             with _toggle_col:
-                _btn_label = "📉 隐藏K线" if st.session_state.show_kline_pool else "📈 显示K线"
+                _btn_label = "[HIDE_KLINE]" if st.session_state.show_kline_pool else "[SHOW_KLINE]"
                 if st.button(_btn_label, key="toggle_kline_pool", use_container_width=True):
                     st.session_state.show_kline_pool = not st.session_state.show_kline_pool
                     st.rerun()
 
-            with st.spinner(f"正在加载 {selected_code} K线..."):
+            with st.spinner(f"Loading {selected_code} kline..."):
                 daily = get_stock_daily(selected_code, days=120)
 
             if daily.empty or len(daily) < 30:
-                st.error("数据不足，无法绘制K线图。")
+                st.error("Insufficient data for kline chart.")
             else:
                 signal_info = get_latest_signal(daily)
                 sig = signal_info["signal"]
@@ -541,19 +626,19 @@ with tab_pool:
                 # 信号卡片 + 指标
                 if sig == "BUY":
                     css_class = "signal-buy"
-                    icon = "🔴"  # 中国股市：涨用红色
-                    sig_label = "建仓信号"
-                    sig_color = "#dc3545"  # 红色
+                    icon = "▲"  # Red for buy
+                    sig_label = "BUY_SIGNAL"
+                    sig_color = "#f85149"  # Red
                 elif sig == "SELL":
                     css_class = "signal-sell"
-                    icon = "🟢"  # 中国股市：跌用绿色
-                    sig_label = "风险信号"
-                    sig_color = "#28a745"  # 绿色
+                    icon = "▼"
+                    sig_label = "SELL_SIGNAL"
+                    sig_color = "#3fb950"  # Green
                 else:
                     css_class = "signal-hold"
-                    icon = "⚪"
-                    sig_label = "观望"
-                    sig_color = "#6c757d"
+                    icon = "─"
+                    sig_label = "HOLD"
+                    sig_color = "#484f58"
 
                 sig_col, ind_col = st.columns([1.5, 3])
 
@@ -562,13 +647,13 @@ with tab_pool:
                     _price_html = ""
                     if sig == "BUY" and signal_info.get("suggest_price"):
                         _price_html = (
-                            f'<div style="margin-top:10px; padding-top:8px; border-top:1px dashed rgba(220,53,69,0.3);">'
-                            f'<div style="font-size:0.8em; color:#dc3545; font-weight:600;">💰 建议建仓价</div>'
-                            f'<div style="font-size:1.4em; font-weight:900; color:#8b1a1a; margin:2px 0;">'
+                            f'<div style="margin-top:10px; padding-top:8px; border-top:1px dashed rgba(248,81,73,0.3); font-family:monospace;">'
+                            f'<div style="font-size:0.78em; color:#f85149; font-weight:600;">ENTRY_PRICE</div>'
+                            f'<div style="font-size:1.3em; font-weight:900; color:#f85149; margin:2px 0; font-family:monospace;">'
                             f'¥{signal_info["suggest_price"]:.2f}</div>'
-                            f'<div style="font-size:0.72em; color:#666; margin-top:4px;">'
-                            f'激进: ¥{signal_info["aggressive_price"]:.2f} &nbsp;|&nbsp; '
-                            f'保守: ¥{signal_info["conservative_price"]:.2f}</div>'
+                            f'<div style="font-size:0.72em; color:#484f58; margin-top:4px; font-family:monospace;">'
+                            f'aggr: ¥{signal_info["aggressive_price"]:.2f} &nbsp;|&nbsp; '
+                            f'conserv: ¥{signal_info["conservative_price"]:.2f}</div>'
                             f'</div>'
                         )
                     st.markdown(
@@ -576,8 +661,8 @@ with tab_pool:
                         f'<div class="signal-icon">{icon}</div>'
                         f'<div class="signal-text" style="color:{sig_color};">{sig_label}</div>'
                         f'<div class="signal-sub">{signal_info["text"]}</div>'
-                        f'<div class="signal-sub" style="margin-top:6px;">'
-                        f'收盘价 &nbsp;<b style="font-size:1.2em; color:#1a1a2e;">{signal_info["close"]:.2f}</b>'
+                        f'<div class="signal-sub" style="margin-top:6px; font-family:monospace;">'
+                        f'close &nbsp;<b style="font-size:1.2em; color:#c9d1d9; font-family:monospace;">{signal_info["close"]:.2f}</b>'
                         f'</div>'
                         f'{_price_html}'
                         f'</div>',
@@ -587,12 +672,12 @@ with tab_pool:
                 with ind_col:
                     ic1, ic2, ic3 = st.columns(3)
                     with ic1:
-                        st.metric("🟠 MA5", f"{signal_info['ma_short']:.2f}")
+                        st.metric("MA5", f"{signal_info['ma_short']:.2f}")
                     with ic2:
-                        st.metric("🔵 MA20", f"{signal_info['ma_long']:.2f}")
+                        st.metric("MA20", f"{signal_info['ma_long']:.2f}")
                     with ic3:
                         boll_width = signal_info['boll_upper'] - signal_info['boll_lower']
-                        st.metric("📏 布林带宽", f"{boll_width:.2f}")
+                        st.metric("BOLL_W", f"{boll_width:.2f}")
 
                 # K线图（根据切换状态显示/隐藏）
                 if st.session_state.show_kline_pool:
@@ -606,23 +691,26 @@ with tab_pool:
                     d1, d2, d3, d4, d5 = st.columns(5)
                     with d1:
                         pct = latest.get("pct_change", 0)
-                        st.metric("涨跌幅", f"{pct:.2f}%", delta=f"{pct:.2f}%" if pct else None)
+                        st.metric("CHG%", f"{pct:.2f}%", delta=f"{pct:.2f}%" if pct else None)
                     with d2:
-                        st.metric("振幅", f"{latest.get('amplitude', 0):.2f}%")
+                        st.metric("AMPLITUDE", f"{latest.get('amplitude', 0):.2f}%")
                     with d3:
                         vol = latest.get('volume', 0)
                         if vol >= 1e8:
-                            st.metric("成交量", f"{vol/1e8:.2f}亿")
+                            st.metric("VOLUME", f"{vol/1e8:.2f}B")
                         else:
-                            st.metric("成交量", f"{vol/1e4:.1f}万")
+                            st.metric("VOLUME", f"{vol/1e4:.1f}W")
                     with d4:
-                        st.metric("收盘价", f"{latest['close']:.2f}")
+                        st.metric("CLOSE", f"{latest['close']:.2f}")
                     with d5:
                         turnover = latest.get('turnover', None)
                         if turnover is not None and pd.notna(turnover):
-                            st.metric("换手率", f"{turnover:.2f}%")
+                            st.metric("TURNOVER", f"{turnover:.2f}%")
                         else:
-                            st.metric("换手率", "N/A")
+                            st.metric("TURNOVER", "N/A")
+
+                # ── 分时走势图（10秒独立刷新） ──
+                _intraday_pool(code=selected_code, name=selected_name, key_prefix="pool")
 
 # ══════════════════════════════════════════════
 #  Tab 2: 自选股
@@ -634,23 +722,23 @@ with tab_watch:
     wh_col1, wh_col2 = st.columns([3, 1])
     with wh_col1:
         st.markdown(
-            f'<div style="display:flex; align-items:center; gap:12px; margin-bottom:8px;">'
-            f'<div style="font-size:1.6em; font-weight:800; color:#1a1a2e;">⭐ 自选股</div>'
-            f'<div style="background:#f59e0b; color:white; padding:3px 12px; border-radius:20px; "'
-            f'font-size:0.8em; font-weight:600;">{today_display} {weekday}</div>'
+            f'<div style="display:flex; align-items:center; gap:12px; margin-bottom:8px; font-family:monospace;">'
+            f'<div style="font-size:1.4em; font-weight:700; color:#c9d1d9; font-family:monospace;">$ WATCHLIST</div>'
+            f'<div style="background:#d29922; color:#0d1117; padding:2px 10px; border-radius:2px; "'
+            f'font-size:0.75em; font-weight:700; font-family:monospace;">{today_display} {weekday}</div>'
             f'</div>',
             unsafe_allow_html=True,
         )
     with wh_col2:
         st.markdown(
-            f'<div style="text-align:right; color:#888; font-size:0.85em; padding-top:8px;">'
-            f'共 <b style="color:#f59e0b; font-size:1.2em;">{len(watchlist)}</b> 只自选'
+            f'<div style="text-align:right; color:#484f58; font-size:0.82em; padding-top:8px; font-family:monospace;">'
+            f'count: <b style="color:#d29922; font-size:1.1em;">{len(watchlist)}</b>'
             f'</div>',
             unsafe_allow_html=True,
         )
 
     if watchlist.empty:
-        st.info("暂无自选股，请在左侧「⭐ 自选股管理」中添加。")
+        st.info("No stocks in watchlist. Add via sidebar [WATCHLIST_MANAGER].")
     else:
         # K线显示/隐藏切换
         if "show_kline_watch" not in st.session_state:
@@ -665,15 +753,15 @@ with tab_watch:
         with wcol_left:
             st.markdown(
                 '<div class="section-title">'
-                '<div class="icon">⭐</div>'
-                '<span>自选股列表</span>'
+                '<div class="icon">#</div>'
+                '<span>WATCHLIST</span>'
                 '</div>',
                 unsafe_allow_html=True,
             )
 
             # 构建展示表格
             watch_display = watchlist[["code", "name"]].copy()
-            watch_display.columns = ["代码", "名称"]
+            watch_display.columns = ["CODE", "NAME"]
             watch_display = watch_display.reset_index(drop=True)
             watch_display.index += 1
 
@@ -703,35 +791,35 @@ with tab_watch:
             with _w_title_col:
                 st.markdown(f"### {w_name} **{w_code}**")
             with _w_toggle_col:
-                _w_btn_label = "📉 隐藏K线" if st.session_state.show_kline_watch else "📈 显示K线"
+                _w_btn_label = "[HIDE_KLINE]" if st.session_state.show_kline_watch else "[SHOW_KLINE]"
                 if st.button(_w_btn_label, key="toggle_kline_watch", use_container_width=True):
                     st.session_state.show_kline_watch = not st.session_state.show_kline_watch
                     st.rerun()
 
-            with st.spinner(f"正在加载 {w_code} K线..."):
+            with st.spinner(f"Loading {w_code} kline..."):
                 w_daily = get_stock_daily(w_code, days=120)
 
             if w_daily.empty or len(w_daily) < 30:
-                st.error("数据不足，无法绘制K线图。")
+                st.error("Insufficient data for kline chart.")
             else:
                 w_signal = get_latest_signal(w_daily)
                 w_sig = w_signal["signal"]
 
                 if w_sig == "BUY":
                     w_css = "signal-buy"
-                    w_icon = "🔴"  # 中国股市：涨用红色
-                    w_sig_label = "建仓信号"
-                    w_sig_color = "#dc3545"  # 红色
+                    w_icon = "▲"
+                    w_sig_label = "BUY_SIGNAL"
+                    w_sig_color = "#f85149"
                 elif w_sig == "SELL":
                     w_css = "signal-sell"
-                    w_icon = "🟢"  # 中国股市：跌用绿色
-                    w_sig_label = "风险信号"
-                    w_sig_color = "#28a745"  # 绿色
+                    w_icon = "▼"
+                    w_sig_label = "SELL_SIGNAL"
+                    w_sig_color = "#3fb950"
                 else:
                     w_css = "signal-hold"
-                    w_icon = "⚪"
-                    w_sig_label = "观望"
-                    w_sig_color = "#6c757d"
+                    w_icon = "─"
+                    w_sig_label = "HOLD"
+                    w_sig_color = "#484f58"
 
                 w_sig_col, w_ind_col = st.columns([1.5, 3])
 
@@ -740,13 +828,13 @@ with tab_watch:
                     _w_price_html = ""
                     if w_sig == "BUY" and w_signal.get("suggest_price"):
                         _w_price_html = (
-                            f'<div style="margin-top:10px; padding-top:8px; border-top:1px dashed rgba(220,53,69,0.3);">'
-                            f'<div style="font-size:0.8em; color:#dc3545; font-weight:600;">💰 建议建仓价</div>'
-                            f'<div style="font-size:1.4em; font-weight:900; color:#8b1a1a; margin:2px 0;">'
+                            f'<div style="margin-top:10px; padding-top:8px; border-top:1px dashed rgba(248,81,73,0.3); font-family:monospace;">'
+                            f'<div style="font-size:0.78em; color:#f85149; font-weight:600;">ENTRY_PRICE</div>'
+                            f'<div style="font-size:1.3em; font-weight:900; color:#f85149; margin:2px 0; font-family:monospace;">'
                             f'¥{w_signal["suggest_price"]:.2f}</div>'
-                            f'<div style="font-size:0.72em; color:#666; margin-top:4px;">'
-                            f'激进: ¥{w_signal["aggressive_price"]:.2f} &nbsp;|&nbsp; '
-                            f'保守: ¥{w_signal["conservative_price"]:.2f}</div>'
+                            f'<div style="font-size:0.72em; color:#484f58; margin-top:4px; font-family:monospace;">'
+                            f'aggr: ¥{w_signal["aggressive_price"]:.2f} &nbsp;|&nbsp; '
+                            f'conserv: ¥{w_signal["conservative_price"]:.2f}</div>'
                             f'</div>'
                         )
                     st.markdown(
@@ -754,8 +842,8 @@ with tab_watch:
                         f'<div class="signal-icon">{w_icon}</div>'
                         f'<div class="signal-text" style="color:{w_sig_color};">{w_sig_label}</div>'
                         f'<div class="signal-sub">{w_signal["text"]}</div>'
-                        f'<div class="signal-sub" style="margin-top:6px;">'
-                        f'收盘价 &nbsp;<b style="font-size:1.2em; color:#1a1a2e;">{w_signal["close"]:.2f}</b>'
+                        f'<div class="signal-sub" style="margin-top:6px; font-family:monospace;">'
+                        f'close &nbsp;<b style="font-size:1.2em; color:#c9d1d9; font-family:monospace;">{w_signal["close"]:.2f}</b>'
                         f'</div>'
                         f'{_w_price_html}'
                         f'</div>',
@@ -765,12 +853,12 @@ with tab_watch:
                 with w_ind_col:
                     wic1, wic2, wic3 = st.columns(3)
                     with wic1:
-                        st.metric("🟠 MA5", f"{w_signal['ma_short']:.2f}")
+                        st.metric("MA5", f"{w_signal['ma_short']:.2f}")
                     with wic2:
-                        st.metric("🔵 MA20", f"{w_signal['ma_long']:.2f}")
+                        st.metric("MA20", f"{w_signal['ma_long']:.2f}")
                     with wic3:
                         w_boll_w = w_signal['boll_upper'] - w_signal['boll_lower']
-                        st.metric("📏 布林带宽", f"{w_boll_w:.2f}")
+                        st.metric("BOLL_W", f"{w_boll_w:.2f}")
 
                 # K线图（根据切换状态显示/隐藏）
                 if st.session_state.show_kline_watch:
@@ -783,20 +871,23 @@ with tab_watch:
                     wd1, wd2, wd3, wd4, wd5 = st.columns(5)
                     with wd1:
                         w_pct = w_latest.get("pct_change", 0)
-                        st.metric("涨跌幅", f"{w_pct:.2f}%", delta=f"{w_pct:.2f}%" if w_pct else None)
+                        st.metric("CHG%", f"{w_pct:.2f}%", delta=f"{w_pct:.2f}%" if w_pct else None)
                     with wd2:
-                        st.metric("振幅", f"{w_latest.get('amplitude', 0):.2f}%")
+                        st.metric("AMPLITUDE", f"{w_latest.get('amplitude', 0):.2f}%")
                     with wd3:
                         w_vol = w_latest.get('volume', 0)
                         if w_vol >= 1e8:
-                            st.metric("成交量", f"{w_vol/1e8:.2f}亿")
+                            st.metric("VOLUME", f"{w_vol/1e8:.2f}B")
                         else:
-                            st.metric("成交量", f"{w_vol/1e4:.1f}万")
+                            st.metric("VOLUME", f"{w_vol/1e4:.1f}W")
                     with wd4:
-                        st.metric("收盘价", f"{w_latest['close']:.2f}")
+                        st.metric("CLOSE", f"{w_latest['close']:.2f}")
                     with wd5:
                         w_turnover = w_latest.get('turnover', None)
                         if w_turnover is not None and pd.notna(w_turnover):
-                            st.metric("换手率", f"{w_turnover:.2f}%")
+                            st.metric("TURNOVER", f"{w_turnover:.2f}%")
                         else:
-                            st.metric("换手率", "N/A")
+                            st.metric("TURNOVER", "N/A")
+
+                # ── 分时走势图（10秒独立刷新） ──
+                _intraday_pool(code=w_code, name=w_name, key_prefix="watch")
